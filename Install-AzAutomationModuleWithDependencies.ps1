@@ -32,6 +32,7 @@ function Check-InstalledModule {
     # check if connected to azure context
     if (-not $(Get-Azcontext)) {
         Write-Error "No subscription found in the context.  Please ensure that the credentials you provided are authorized to access an Azure subscription, then run Connect-AzAccount to login."
+        Exit
     }
 
     $Return = $false
@@ -82,7 +83,7 @@ function Check-InstalledModule {
             } while (($null -ne $ModuleExists) -or ($Timer -lt $Timeout))
 
             Write-Host ''
-
+            
             # checking verification timeout
             if ($ModuleExists -and ($Timer -ge $Timeout)) {
                 $Err = "Error removing the module, existed on timout: $Timeout"
@@ -131,6 +132,7 @@ function Get-ModuleDependenciesRecursively {
     # check if connected to azure context
     if (-not $(Get-Azcontext)) {
         Write-Error "No subscription found in the context.  Please ensure that the credentials you provided are authorized to access an Azure subscription, then run Connect-AzAccount to login."
+        Exit
     }
 
     # collection of modules to return
@@ -157,6 +159,7 @@ function Get-ModuleDependenciesRecursively {
                                             Version = "$($Module.Version)"
                                             Repository = "$($Module.Repository)"
                                             Priority = $Level
+                                            InstallationStatus = 'NotStarted'
                                         }
 
     # get root module's dependencies
@@ -202,7 +205,8 @@ function Install-AzAutomationModuleWithDependencies {
     .PARAMETER ResolveOnly
         Allows to resolve dependencies and output them without installing the modules 
     .OUTPUTS
-
+        Logs the installation process into console interactively
+        Returns error if one of deployment phases's failed
     .EXAMPLE
         Install-AzAutomationModuleWithDependencies -AutomationAccountName 'SampleAutomation' -ResourceGroupName 'SampleRG' -ModuleName 'Az'
         Installs latest Az module version with all dependencies into SampleAutomation automation account belonging tp SampleRG resource group
@@ -223,6 +227,7 @@ function Install-AzAutomationModuleWithDependencies {
     # check if connected to azure context
     if (-not $(Get-Azcontext)) {
         Write-Error "No subscription found in the context.  Please ensure that the credentials you provided are authorized to access an Azure subscription, then run Connect-AzAccount to login."
+        Exit
     }
 
     if ($ResolveOnly) {Write-Warning "No modules will be installed, the script is running in ResolveOnly mode"}
@@ -236,6 +241,11 @@ function Install-AzAutomationModuleWithDependencies {
         $RootModule = Find-Module -Name "$ModuleName" -Repository "$RepositoryName"
     }
 
+    if (-not $RootModule) {
+        Write-Error "Module:'$ModuleName', ModuleVersion:'$ModuleVersion' canot be found in RepositoryName:'$RepositoryName'"
+        Exit
+    }
+
     Write-Host "Root module found: " -NoNewline
     Write-Host "$($RootModule.Name)" -ForegroundColor Yellow -NoNewline
     Write-Host "; Version:" -NoNewline
@@ -245,26 +255,21 @@ function Install-AzAutomationModuleWithDependencies {
 
     Write-Host "Resolving dependencies..."
     # initiate recursive dependencies search
-    if ($RootModule) {
-        $ModulesInstallationList = Get-ModuleDependenciesRecursively -ModuleName "$($RootModule.Name)" `
+    $ModulesInstallationList = Get-ModuleDependenciesRecursively -ModuleName "$($RootModule.Name)" `
                                             -ReqVersion "$($RootModule.Version)" -RepositoryName "$($RootModule.Repository)" -Level 0
-    }
-    else {
-        Write-Error "Module:'$ModuleName', ModuleVersion:'$ModuleVersion' canot be found in RepositoryName:'$RepositoryName'"
-        Exit 1
-    }
+
 
     # sort the modules in their installation sequence and get only unique items
-    $ModulesInstallationList = $ModulesInstallationList | Sort-Object Priority -Descending | Select-Object Name, Version, Repository, Priority -Unique
+    $ModulesInstallationList = $ModulesInstallationList | Sort-Object Priority -Descending | Select-Object Name, Version, Repository, Priority, InstallationStatus -Unique
 
     # get deployment phases
     $DeploymentPhases = $ModulesInstallationList.Priority | Get-Unique | Sort-Object -Descending
 
     Write-Host "Modules found: " -NoNewline
     Write-Host "$($ModulesInstallationList.count)" -ForegroundColor Yellow
-    $ModulesInstallationList | Format-Table -AutoSize
+    $ModulesInstallationList | Select-Object Name, Version, Repository, Priority | Format-Table -AutoSize
 
-    # if we di the actual installation
+    # if we do the actual installation
     if (-not $ResolveOnly) {
         Write-Host "Processing..."
         foreach ($Phase in $DeploymentPhases) {
@@ -272,75 +277,76 @@ function Install-AzAutomationModuleWithDependencies {
 
             $ModulesInstallationPhase = $ModulesInstallationList.where({$_.Priority -eq $Phase})
             # installation
-            foreach ($Module in $ModulesInstallationPhase) {
+            for ($i=0; $i -lt $ModulesInstallationPhase.count; $i++) {
 
                 Write-Host "Installing Module: " -NoNewline
-                Write-Host "$($Module.Name)" -ForegroundColor Yellow -NoNewline
+                Write-Host "$($ModulesInstallationPhase[$i].Name)" -ForegroundColor Yellow -NoNewline
                 Write-Host "; Version:" -NoNewline
-                Write-Host "$($Module.Version)" -ForegroundColor Yellow -NoNewline
+                Write-Host "$($ModulesInstallationPhase[$i].Version)" -ForegroundColor Yellow -NoNewline
                 Write-Host "; Repository: " -NoNewline
-                Write-Host "$($Module.Repository)" -ForegroundColor Yellow
+                Write-Host "$($ModulesInstallationPhase[$i].Repository)" -ForegroundColor Yellow
 
                 # check if the module exists
                 $ModuleExists = Check-InstalledModule -AutomationAccountName "$AutomationAccountName" -ResourceGroupName "$ResourceGroupName" `
-                                                -ModuleName "$($Module.Name)" -ModuleVersion "$($Module.Version)"
+                                                -ModuleName "$($ModulesInstallationPhase[$i].Name)" -ModuleVersion "$($ModulesInstallationPhase[$i].Version)"
                 if ($ModuleExists -is [bool]) {
                     if ($ModuleExists) {
                         Write-Host "Skipped, already installed"
+                        $ModulesInstallationPhase[$i].InstallationStatus = "Succeeded"
                     }
                     else {
                         try {
-                            $null = New-AzAutomationModule -AutomationAccountName "$AutomationAccountName" -ResourceGroupName "$ResourceGroupName" `
-                                        -Name "$($Module.Name)" -ContentLinkUri "https://www.powershellgallery.com/api/v2/package/$($Module.Name)/$($Module.Version)" -ErrorAction Stop
+                            $ModulesInstallationPhase[$i].InstallationStatus = (New-AzAutomationModule -AutomationAccountName "$AutomationAccountName" -ResourceGroupName "$ResourceGroupName" `
+                                        -Name "$($ModulesInstallationPhase[$i].Name)" `
+                                        -ContentLinkUri "https://www.powershellgallery.com/api/v2/package/$($ModulesInstallationPhase[$i].Name)/$($ModulesInstallationPhase[$i].Version)" `
+                                        -ErrorAction Stop).ProvisioningState
                         }
                         catch {
                             # error handling
                             Write-Error $_.Exception
-                            return $_.Exception
                         }
                         Write-Host "Installation initiated"
                     }
                 }
                 else {Exit}
-
             }
 
             # verification
-            $Timeout = 300 + ($ModulesInstallationPhase.count * 10)
+            
+            # set timeouts
+            if ($ModulesInstallationPhase.count -gt 20) {$Timeout = 550}
+            else {$Timeout = 300 + ($ModulesInstallationPhase.count * 10)}
             $Timer = 0
             $Step = 5
-            # initial verification collections
-            $ModulesInstallationInProgress = $ModulesInstallationPhase
-            $ModulesInstallationCompleted = @()
-            do {
+            while (($ModulesInstallationPhase.where({$_.InstallationStatus -ne 'Succeeded' -and $_.InstallationStatus -ne 'Failed'}).count -ne 0) `
+            -and ($Timer -lt $Timeout)) {
                 Write-Host '.' -NoNewline
                 Start-Sleep -Seconds $Step
                 $Timer += $Step
-
-                $ModulesInstallationStatus = @()
-                foreach ($Module in $ModulesInstallationInProgress) {
-                    $ModulesInstallationStatus += Get-AzAutomationModule -AutomationAccountName "$AutomationAccountName" -ResourceGroupName "$ResourceGroupName" `
-                                                            -Name "$($Module.Name)" -ErrorAction SilentlyContinue
+                for ($i=0; $i -lt $ModulesInstallationPhase.count; $i++) {
+                    if ($ModulesInstallationPhase[$i].InstallationStatus -ne 'Succeeded' -and $ModulesInstallationPhase[$i].InstallationStatus -ne 'Failed') {
+                    $ModulesInstallationPhase[$i].InstallationStatus = (Get-AzAutomationModule -AutomationAccountName "$AutomationAccountName" `
+                                                                                            -ResourceGroupName "$ResourceGroupName" `
+                                                                                            -Name "$($ModulesInstallationPhase[$i].Name)" `
+                                                                                            -ErrorAction SilentlyContinue).ProvisioningState
+                    }
 
                 }
-                # accumulate completed deployments
-                $ModulesInstallationCompleted += $ModulesInstallationStatus.where({$_.ProvisioningState -eq 'Succeeded' -or $_.ProvisioningState -eq 'Failed'})
-                # get in progress deployments
-                $ModulesInstallationInProgress = $ModulesInstallationStatus.where({$_.ProvisioningState -ne 'Succeeded' -and $_.ProvisioningState -ne 'Failed'})
-            } until (($ModulesInstallationInProgress.count -eq 0) -or ($Timer -ge $Timeout))
+            }
 
             Write-Host ''
 
             # checking verification timeout
-            if ($ModulesInstallationInProgress -and ($Timer -ge $Timeout)) {
+            if (($Timer -ge $Timeout)) {
                 $Err = "Error processing phase $Phase, existed on timout: $Timeout"
+                # output results
+                $ModulesInstallationPhase | Sort-Object Name | Format-Table -AutoSize
                 Write-Error $Err
                 return $Err
             }
             else {
                 # output results
-                $ModulesInstallationCompleted | Select-Object Name,@{label='Status';expression={$_.ProvisioningState}} | 
-                                                                Sort-Object Name | Format-Table -AutoSize
+                $ModulesInstallationPhase | Sort-Object Name | Format-Table -AutoSize
 
                 Write-Host "Deployment phase: " -NoNewline; Write-Host "$Phase" -ForegroundColor Yellow -NoNewline
                 Write-Host " is completed"
@@ -351,13 +357,14 @@ function Install-AzAutomationModuleWithDependencies {
 }
 
 <#
-$tknId = ''
-$tknSecret = ''
+# you can use the code below to connect and run the script
+$spId = ''
+$spSecret = ''
 $tenantId = ''
 
-$token = New-Object System.Management.Automation.PSCredential($tknId,$(ConvertTo-SecureString $tknSecret -AsPlainText -Force))
+$spCreds = New-Object System.Management.Automation.PSCredential($spId,$(ConvertTo-SecureString $spSecret -AsPlainText -Force))
 
-Connect-AzAccount -ServicePrincipal -Credential $token -Tenant $tenantId
+Connect-AzAccount -ServicePrincipal -Credential $spCreds -Tenant $tenantId
 
 Install-AzAutomationModuleWithDependencies -AutomationAccountName '' -ResourceGroupName '' -ModuleName '' #-ResolveOnly
 #>
