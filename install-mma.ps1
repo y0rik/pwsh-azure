@@ -1,6 +1,7 @@
 param (
     [parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$WorkSpaceID,
-    [parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$WorkSpaceKey
+    [parameter(Mandatory=$true)][ValidateNotNullOrEmpty()][string]$WorkSpaceKey,
+    [parameter(Mandatory=$false)][ValidateNotNullOrEmpty()][string]$rootFolder = 'C:\tmp'
 )
 
 function Test-MMAInstallation {
@@ -22,7 +23,6 @@ function Test-ExistingMMAWorkspace {
 
 # set paths
 $mmaFileName = "MMASetup-AMD64.exe"
-$rootFolder = 'C:\tmp'
 $mmaFullPath = Join-Path -Path "$rootFolder" -ChildPath "$mmaFileName"
 $mmaLogPullPath = "c:\MMAInstallLog.txt"
 $mmaURL = "http://download.microsoft.com/download/1/5/E/15E274B9-F9E2-42AE-86EC-AC988F7631A0/MMASetup-AMD64.exe"
