@@ -24,7 +24,7 @@ function Test-ExistingMMAWorkspace {
 # set paths
 $mmaFileName = "MMASetup-AMD64.exe"
 $mmaFullPath = Join-Path -Path "$rootFolder" -ChildPath "$mmaFileName"
-$mmaLogPullPath = "c:\MMAInstallLog.txt"
+$mmaLogPullPath = "c:\MMAInstallLog-$((get-date).tostring('yyyyddMM_HHmmss')).txt"
 $mmaURL = "http://download.microsoft.com/download/1/5/E/15E274B9-F9E2-42AE-86EC-AC988F7631A0/MMASetup-AMD64.exe"
 
 # start logging the actions
@@ -40,8 +40,6 @@ if ($mmaInstalled) {
     if ($mmaWSExists) {
         # NO ACTION
         Write-Host "The workspace is already added: $WorkSpaceID"
-        Stop-Transcript
-        Exit 0
     }
     else {
         # ADD WORKSPACE
@@ -121,4 +119,5 @@ else {
     }
 }
 
+# stop transcript
 Stop-Transcript
