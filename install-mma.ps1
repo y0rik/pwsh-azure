@@ -106,7 +106,7 @@ else {
     Write-Host "installing MMA.." -nonewline
     $ArgumentList = '/C:"setup.exe /qn ADD_OPINSIGHTS_WORKSPACE=1 '+  "OPINSIGHTS_WORKSPACE_ID=$WorkspaceID " + "OPINSIGHTS_WORKSPACE_KEY=$WorkSpaceKey " +'AcceptEndUserLicenseAgreement=1"'
     $installed = $true
-    try {$null = Start-Process "$mmaFullPath" -ArgumentList $ArgumentList -ErrorAction Stop -Wait}
+    try {$null = Start-Process "$mmaFullPath" -ArgumentList $ArgumentList -ErrorAction Stop -Wait -Verb RunAs}
     catch {
         $installed = $false
         $err = $_.Exception.Message
